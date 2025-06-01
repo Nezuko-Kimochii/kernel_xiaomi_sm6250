@@ -1115,7 +1115,7 @@ static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off,
 		return 0;
 
 	if (env->prog->aux->ops->is_valid_access &&
-	    env->prog->aux->ops->is_valid_access(off, size, t, env->prog, &info)) {
+	    env->prog->aux->ops->is_valid_access(off, size, t, &info)) {
 		/* A non zero info.ctx_field_size indicates that this field is a
 		 * candidate for later verifier transformation to load the whole
 		 * field and then apply a mask when accessed with a narrower
@@ -1852,7 +1852,7 @@ static int check_call(struct bpf_verifier_env *env, int func_id, int insn_idx)
 	}
 
 	if (env->prog->aux->ops->get_func_proto)
-		fn = env->prog->aux->ops->get_func_proto(func_id, env->prog);
+		fn = env->prog->aux->ops->get_func_proto(func_id);
 
 	if (!fn) {
 		verbose("unknown func %s#%d\n", func_id_name(func_id), func_id);
@@ -3584,48 +3584,6 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return 0;
 }
 
-static int check_return_code(struct bpf_verifier_env *env)
-{
-	struct bpf_reg_state *reg;
-	struct tnum range = tnum_range(0, 1);
-
-	switch (env->prog->type) {
-	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
-		if (env->prog->expected_attach_type == BPF_CGROUP_UDP4_RECVMSG ||
-		    env->prog->expected_attach_type == BPF_CGROUP_UDP6_RECVMSG)
-			range = tnum_range(1, 1);
-	case BPF_PROG_TYPE_CGROUP_SKB:
-	case BPF_PROG_TYPE_CGROUP_SOCK:
-	case BPF_PROG_TYPE_SOCK_OPS:
-		break;
-	default:
-		return 0;
-	}
-
-	reg = &env->cur_state->regs[BPF_REG_0];
-	if (reg->type != SCALAR_VALUE) {
-		verbose("At program exit the register R0 is not a known value (%s)\n",
-			reg_type_str[reg->type]);
-		return -EINVAL;
-	}
-
-	if (!tnum_in(range, reg->var_off)) {
-		char tn_buf[48];
-
-		verbose("At program exit the register R0 ");
-		if (!tnum_is_unknown(reg->var_off)) {
-			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-			verbose("has value %s", tn_buf);
-		} else {
-			verbose("has unknown scalar value");
-		}
-		tnum_strn(tn_buf, sizeof(tn_buf), range);
-		verbose(" should have been in %s\n", tn_buf);
-		return -EINVAL;
-	}
-	return 0;
-}
-
 /* non-recursive DFS pseudo code
  * 1  procedure DFS-iterative(G,v):
  * 2      label v as discovered
@@ -4211,13 +4169,10 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 static int ext_analyzer_insn_hook(struct bpf_verifier_env *env,
 				  int insn_idx, int prev_insn_idx)
 {
-	if (env->analyzer_ops && env->analyzer_ops->insn_hook)
-		return env->analyzer_ops->insn_hook(env, insn_idx,
-						    prev_insn_idx);
-	if (env->dev_ops && env->dev_ops->insn_hook)
-		return env->dev_ops->insn_hook(env, insn_idx, prev_insn_idx);
+	if (!env->analyzer_ops || !env->analyzer_ops->insn_hook)
+		return 0;
 
-	return 0;
+	return env->analyzer_ops->insn_hook(env, insn_idx, prev_insn_idx);
 }
 
 static int do_check(struct bpf_verifier_env *env)
@@ -4467,9 +4422,6 @@ static int do_check(struct bpf_verifier_env *env)
 					return -EACCES;
 				}
 
-				err = check_return_code(env);
-				if (err)
-					return err;
 process_bpf_exit:
 				err = pop_stack(env, &env->prev_insn_idx, &env->insn_idx);
 				if (err < 0) {
@@ -5087,7 +5039,7 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			insn      = new_prog->insnsi + i + delta;
 		}
 patch_call_imm:
-		fn = prog->aux->ops->get_func_proto(insn->imm, env->prog);
+		fn = prog->aux->ops->get_func_proto(insn->imm);
 		/* all functions that have prototype and verifier allowed
 		 * programs to call them, must be real in-kernel functions
 		 */
@@ -5174,12 +5126,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr)
 	env->strict_alignment = !!(attr->prog_flags & BPF_F_STRICT_ALIGNMENT);
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))
 		env->strict_alignment = true;
-
-	if (env->prog->aux->offload) {
-		ret = bpf_prog_offload_verifier_prep(env);
-		if (ret)
-			goto err_unlock;
-	}
 
 	ret = replace_map_fd_with_map_ptr(env);
 	if (ret < 0)
