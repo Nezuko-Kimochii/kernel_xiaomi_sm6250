@@ -143,6 +143,18 @@ static int two_million = 2000000;
 #endif
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
+
+#ifdef CONFIG_SCHED_BORE
+extern u32 sched_bore;
+extern u32 sched_burst_smoothness_long;
+extern u32 sched_burst_smoothness_short;
+extern u32 sched_burst_fork_atavistic;
+extern u32 sched_burst_penalty_offset;
+extern u32 sched_burst_penalty_scale;
+extern u32 sched_burst_cache_lifetime;
+static int __maybe_unused sixty_four = 64;
+static int __maybe_unused maxval_12_bits = 4095;
+#endif // CONFIG_SCHED_BORE
 #endif
 #ifdef CONFIG_PERF_EVENTS
 static int six_hundred_forty_kb = 640 * 1024;
@@ -1417,6 +1429,69 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &one_thousand,
 	},
 #endif
+#ifdef CONFIG_SCHED_BORE
+	{
+		.procname	= "sched_bore",
+		.data		= &sched_bore,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &one,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "sched_burst_smoothness_long",
+		.data		= &sched_burst_smoothness_long,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "sched_burst_smoothness_short",
+		.data		= &sched_burst_smoothness_short,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "sched_burst_fork_atavistic",
+		.data		= &sched_burst_fork_atavistic,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &three,
+	},
+	{
+		.procname	= "sched_burst_penalty_offset",
+		.data		= &sched_burst_penalty_offset,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &sixty_four,
+	},
+	{
+		.procname	= "sched_burst_penalty_scale",
+		.data		= &sched_burst_penalty_scale,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &maxval_12_bits,
+	},
+	{
+		.procname	= "sched_burst_cache_lifetime",
+		.data		= &sched_burst_cache_lifetime,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler = proc_douintvec,
+	},
+#endif // CONFIG_SCHED_BORE
 	{
 		.procname	= "panic_on_warn",
 		.data		= &panic_on_warn,
@@ -2252,6 +2327,9 @@ int __init sysctl_init(void)
 }
 
 #endif /* CONFIG_SYSCTL */
+
+#ifdef CONFIG_SCHED_BORE
+#endif // CONFIG_SCHED_BORE
 
 /*
  * /proc/sys support
