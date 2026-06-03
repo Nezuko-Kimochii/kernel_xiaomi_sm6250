@@ -66,58 +66,82 @@ static int read_sysfs_int(const char *path, int *out_value) {
 	return 0;
 }
 
-static int get_usb_type(void) {
+static int get_usb_type(void)
+{
 	struct power_supply *psy;
 	union power_supply_propval val = { 0 };
-	int usb_type = POWER_SUPPLY_USB_TYPE_UNKNOWN;
+	int usb_type = POWER_SUPPLY_TYPE_UNKNOWN;
 
 	psy = power_supply_get_by_name("usb");
 	if (psy) {
-		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_USB_TYPE, &val))
+		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_TYPE, &val))
 			usb_type = val.intval;
 		power_supply_put(psy);
 	}
 	return usb_type;
 }
 
-static int get_adapter_power_mw(void) {
-    struct power_supply *psy;
-    union power_supply_propval val = { 0 };
-    int power_w = 0;
+static int get_adapter_power_mw(void)
+{
+	struct power_supply *psy;
+	union power_supply_propval val = { 0 };
+	int power_mw = 0;
 
-    psy = power_supply_get_by_name("usb");
-    if (psy) {
-        if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_POWER_MAX, &val)) {
-            power_w = val.intval;
-        }
-        power_supply_put(psy);
-    }
+	psy = power_supply_get_by_name("usb");
+	if (psy) {
+		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_POWER_NOW, &val)) {
+			power_mw = val.intval;
+		}
+		power_supply_put(psy);
+	}
 
-    if (power_w > 0) {
-        if (power_w == 90) power_w = 100;
-        return power_w * 1000;
-    }
+	if (power_mw > 0) {
+		/* normalize strange 90->100 mapping kept from original logic */
+		if (power_mw == 90)
+			power_mw = 100;
+		return power_mw;
+	}
 
-    return 10000;
+	/* default 10W */
+	return 10000;
 }
 
-static u8 get_quick_charge_type(void) {
-	int power_mw = get_adapter_power_mw();
-	int usb_type = get_usb_type();
+static bool usb_is_pd_pps(void)
+{
+	struct power_supply *psy;
+	union power_supply_propval val = { 0 };
+	bool is_pps = false;
 
-	if (power_mw >= 65000) return QUICK_CHARGE_SUPER;
-	if (power_mw >= 15000 || usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS) return QUICK_CHARGE_FAST;
+	psy = power_supply_get_by_name("usb");
+	if (psy) {
+		if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_PD_ACTIVE, &val))
+			is_pps = (val.intval == POWER_SUPPLY_PD_PPS_ACTIVE);
+		power_supply_put(psy);
+	}
+	return is_pps;
+}
+
+static u8 get_quick_charge_type(void)
+{
+	int power_mw = get_adapter_power_mw();
+
+	if (power_mw >= 65000)
+		return QUICK_CHARGE_SUPER;
+	if (power_mw >= 15000 || usb_is_pd_pps())
+		return QUICK_CHARGE_FAST;
 
 	return QUICK_CHARGE_NORMAL;
 }
 
-static int get_protocol_code(void) {
-	switch (get_usb_type()) {
-	case POWER_SUPPLY_USB_TYPE_PD_PPS: return PROTOCOL_PD_PPS;
-	case POWER_SUPPLY_USB_TYPE_PD:
-	case POWER_SUPPLY_USB_TYPE_PD_DRP: return PROTOCOL_PD;
-	default:                           return PROTOCOL_NORMAL;
-	}
+static int get_protocol_code(void)
+{
+	int type = get_usb_type();
+
+	if (usb_is_pd_pps())
+		return PROTOCOL_PD_PPS;
+	if (type == POWER_SUPPLY_TYPE_USB_PD || type == POWER_SUPPLY_TYPE_USB_PD_DRP)
+		return PROTOCOL_PD;
+	return PROTOCOL_NORMAL;
 }
 
 static int get_soh(void) {
@@ -247,9 +271,9 @@ static ssize_t fast_chg_type_show(struct device *dev, struct device_attribute *a
 
     if (power_mw >= 65000) {
         type = 2;
-    } else if (power_mw >= 15000 || usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS) {
+    } else if (power_mw >= 15000 || usb_is_pd_pps()) {
         type = 1;
-    } else if (usb_type == POWER_SUPPLY_USB_TYPE_PD || usb_type == POWER_SUPPLY_USB_TYPE_PD_DRP) {
+    } else if (usb_type == POWER_SUPPLY_TYPE_USB_PD || usb_type == POWER_SUPPLY_TYPE_USB_PD_DRP) {
         type = 3;
     }
 
@@ -258,12 +282,12 @@ static ssize_t fast_chg_type_show(struct device *dev, struct device_attribute *a
 static DEVICE_ATTR_RO(fast_chg_type);
 
 static ssize_t ppschg_ing_show(struct device *dev, struct device_attribute *attr, char *buf) {
-	return scnprintf(buf, PAGE_SIZE, "%d\n", get_usb_type() == POWER_SUPPLY_USB_TYPE_PD_PPS ? 1 : 0);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", usb_is_pd_pps() ? 1 : 0);
 }
 static DEVICE_ATTR_RO(ppschg_ing);
 
 static ssize_t ppschg_power_show(struct device *dev, struct device_attribute *attr, char *buf) {
-	if (get_usb_type() != POWER_SUPPLY_USB_TYPE_PD_PPS) return scnprintf(buf, PAGE_SIZE, "0\n");
+	if (!usb_is_pd_pps()) return scnprintf(buf, PAGE_SIZE, "0\n");
 	return scnprintf(buf, PAGE_SIZE, "%d\n", get_adapter_power_mw());
 }
 static DEVICE_ATTR_RO(ppschg_power);
@@ -585,7 +609,7 @@ static ssize_t charger_wattage_show(struct device *dev, struct device_attribute 
 
     psy = power_supply_get_by_name("usb");
     if (psy) {
-        if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_POWER_MAX, &val)) {
+        if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_POWER_NOW, &val)) {
             power_w = val.intval;
         }
         power_supply_put(psy);

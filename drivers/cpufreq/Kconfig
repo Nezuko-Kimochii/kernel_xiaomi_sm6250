@@ -213,6 +213,57 @@ config CPU_BOOST
 
 	  If in doubt, say N.
 
+config CPU_INPUT_BOOST
+	bool "CPU input boost"
+	depends on CPU_FREQ && INPUT
+	select CPU_BOOST
+	help
+	  Enable CPU frequency boost on input events. This option enables the
+	  input event handler and boosts CPU minimum frequency for a short
+	  duration after user input.
+
+config INPUT_BOOST_DURATION_MS
+	int "Input boost duration (ms)"
+	depends on CPU_INPUT_BOOST
+	default 64
+	help
+	  Set the duration for input boost in milliseconds.
+
+config WAKE_BOOST_DURATION_MS
+	int "Wake boost duration (ms)"
+	depends on CPU_INPUT_BOOST
+	default 500
+	help
+	  Set the wake boost duration in milliseconds.
+
+config INPUT_BOOST_FREQ_LP
+	int "Input boost frequency LP cluster (kHz)"
+	depends on CPU_INPUT_BOOST
+	default 1708800
+	help
+	  Set the low-power cluster input boost frequency in kHz.
+
+config INPUT_BOOST_FREQ_PERF
+	int "Input boost frequency Perf cluster (kHz)"
+	depends on CPU_INPUT_BOOST
+	default 1324800
+	help
+	  Set the performance cluster input boost frequency in kHz.
+
+config MIN_FREQ_LP
+	int "Minimum LP cluster frequency (kHz)"
+	depends on CPU_INPUT_BOOST
+	default 576000
+	help
+	  Set the low-power cluster minimum frequency in kHz during input boost.
+
+config MIN_FREQ_PERF
+	int "Minimum Perf cluster frequency (kHz)"
+	depends on CPU_INPUT_BOOST
+	default 652800
+	help
+	  Set the performance cluster minimum frequency in kHz during input boost.
+
 config CPU_FREQ_GOV_SCHEDUTIL
 	bool "'schedutil' cpufreq policy governor"
 	depends on CPU_FREQ && SMP
