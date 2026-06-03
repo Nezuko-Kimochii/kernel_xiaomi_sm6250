@@ -60,7 +60,7 @@ export PATH="$CLANG_DIR/bin:$GCC32_DIR/bin:$PATH"
 # Set environment variables
 	export USE_CCACHE=1
 	export KBUILD_BUILD_HOST=xyz
-	export KBUILD_BUILD_USER=michiko
+	export KBUILD_BUILD_USER=prindapan
 	
 # 🔍 Auto detect defconfig
 CONFIG_PATH="$KERNEL_DIR/arch/arm64/configs/vendor/xiaomi"
@@ -99,6 +99,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# ✅ Verifikasi config LOCALVERSION
+echo -e "${CYAN}ℹ️ Verifikasi config kernel...${RESET}"
+CONFIG_LOCAL=$(grep "^CONFIG_LOCALVERSION=" "$OUT_DIR/.config" 2>/dev/null | cut -d'=' -f2)
+echo -e "${YELLOW}📌 CONFIG_LOCALVERSION:${RESET} ${GREEN}${CONFIG_LOCAL}${RESET}"
+
 # 🧭 Menuconfig opsional
 read -p "$(echo -e ${MAGENTA}'🧭 Ingin buka menuconfig sebelum build? (y/n): '${RESET})" menu
 [[ "$menu" =~ ^[Yy]$ ]] && make O="$OUT_DIR" ARCH="$ARCH" menuconfig | tee -a "$BUILD_LOG"
@@ -133,10 +138,22 @@ echo -e "\n${CYAN}==============================================================
 if [ -f "$IMAGE" ]; then
     echo -e "${GREEN}✅ Build kernel berhasil!${RESET}"
     echo -e "${YELLOW}📦 Output:${RESET} ${BLUE}${IMAGE}${RESET}"
+    
+    # Tampilkan kernel release dari build ini
+    KERNEL_RELEASE=$(make -s O="$OUT_DIR" ARCH="$ARCH" kernelrelease 2>/dev/null || true)
+    if [ -n "$KERNEL_RELEASE" ]; then
+        echo -e "${YELLOW}🔖 Kernel release:${RESET} ${GREEN}${KERNEL_RELEASE}${RESET}"
+    fi
+    
     # Rename hasil build otomatis
     FINAL_IMAGE="$KERNEL_DIR/Millenia-Kernel-${DATE}.img"
     cp "$IMAGE" "$FINAL_IMAGE"
     echo -e "${GREEN}💾 Disalin ke:${RESET} ${FINAL_IMAGE}"
+    
+    echo -e "\n${CYAN}🎯 Instruksi flash:${RESET}"
+    echo -e "${YELLOW}File kernel yang siap di-flash:${RESET} ${BLUE}${FINAL_IMAGE}${RESET}"
+    echo -e "${YELLOW}Kernel release:${RESET} ${GREEN}${KERNEL_RELEASE}${RESET}"
+    echo -e "${MAGENTA}Pastikan file ini yang di-flash ke HP, bukan file lama!${RESET}"
 
 else
     echo -e "${RED}❌ Build kernel gagal. Periksa ${BUILD_LOG}.${RESET}"
