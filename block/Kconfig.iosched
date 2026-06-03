@@ -33,6 +33,33 @@ config IOSCHED_CFQ
 
 	  This is the default I/O scheduler.
 
+config IOSCHED_MAPLE
+	tristate "MAPLE I/O scheduler"
+	depends on BLOCK
+	default n
+	---help---
+	  The MAPLE I/O scheduler is an alternative scheduler used for
+	  certain Android and mobile workloads. It is exposed here so it
+	  can be selected in menuconfig when available in the source tree.
+
+config IOSCHED_FIOPS
+	tristate "FIOPS I/O scheduler"
+	depends on BLOCK
+	default n
+	---help---
+	  The FIOPS I/O scheduler is an alternative I/O scheduler for
+	  flash-friendly devices. It is exposed here so it can be selected
+	  in menuconfig when available in the source tree.
+
+config IOSCHED_SIO
+	tristate "SIO I/O scheduler"
+	depends on BLOCK
+	default n
+	---help---
+	  The SIO I/O scheduler is an alternative I/O scheduler for
+	  some mobile storage configurations. It is exposed here so it can
+	  be selected in menuconfig when available in the source tree.
+
 config CFQ_GROUP_IOSCHED
 	bool "CFQ Group Scheduling support"
 	depends on IOSCHED_CFQ && BLK_CGROUP
@@ -54,6 +81,15 @@ choice
 	config DEFAULT_CFQ
 		bool "CFQ" if IOSCHED_CFQ=y
 
+	config DEFAULT_MAPLE
+		bool "MAPLE" if IOSCHED_MAPLE=y
+
+	config DEFAULT_FIOPS
+		bool "FIOPS" if IOSCHED_FIOPS=y
+
+	config DEFAULT_SIO
+		bool "SIO" if IOSCHED_SIO=y
+
 	config DEFAULT_NOOP
 		bool "No-op"
 
@@ -63,6 +99,9 @@ config DEFAULT_IOSCHED
 	string
 	default "deadline" if DEFAULT_DEADLINE
 	default "cfq" if DEFAULT_CFQ
+	default "maple" if DEFAULT_MAPLE
+	default "fiops" if DEFAULT_FIOPS
+	default "sio" if DEFAULT_SIO
 	default "noop" if DEFAULT_NOOP
 
 config MQ_IOSCHED_DEADLINE
