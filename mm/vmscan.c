@@ -170,7 +170,7 @@ unsigned long sysctl_clean_min_kbytes __read_mostly = CONFIG_CLEAN_MIN_KBYTES;
 /*
  * From 0 .. 200.  Higher means more swappy.
  */
-int vm_swappiness = 100;
+int vm_swappiness = 120;
 
 #ifdef CONFIG_OPLUS_MM_HACKS
 /*
