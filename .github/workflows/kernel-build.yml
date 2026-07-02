@@ -1,0 +1,416 @@
+name: "Kernel Build MICHIKO HYBRID"
+
+on:
+  workflow_dispatch:
+    inputs:
+      KERNEL_BRANCH:
+        description: "🗂️ Branch Kernel"
+        required: true
+        default: "main"
+        type: string
+
+      KERNEL_NAME:
+        description: "📝 Nama Kernel"
+        required: true
+        default: "SuperPotato"
+        type: choice
+        options:
+          - SuperPotato
+          - SuperCreepy
+
+      ENABLE_LTO:
+        description: "⚡ Aktifkan CONFIG_LTO"
+        required: true
+        default: "false"
+        type: boolean
+
+      ENABLE_CAMERA_BOOTCLOCK:
+        description: "📷 Aktifkan CONFIG_CAMERA_BOOTCLOCK_TIMESTAMP"
+        required: true
+        default: "false"
+        type: boolean
+
+jobs:
+  build:
+    name: "🔨 Build Kernel"
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Jakarta
+      DEFCONFIG: surya_defconfig
+      ARCH: arm64
+      KERNEL_DIR: ${{ github.workspace }}/kernel
+      OUT_DIR: ${{ github.workspace }}/kernel/out
+      CLANG_DIR: ${{ github.workspace }}/clang
+      GCC64_DIR: ${{ github.workspace }}/aarch64-linux-android-4.9
+      GCC32_DIR: ${{ github.workspace }}/arm-linux-androideabi-4.9
+      ANYKERNEL_DIR: ${{ github.workspace }}/AnyKernel3
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Versi toolchain — ubah jika ingin invalidate cache
+      CLANG_REV: "clang-r584948b"
+      GCC_REV: "lineage-20"
+
+    steps:
+      # ──────────────────────────────────────────
+      # 1. CHECKOUT KERNEL SOURCE
+      # ──────────────────────────────────────────
+      - name: "📥 Checkout Kernel Source"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.KERNEL_BRANCH }}
+          path: kernel
+          fetch-depth: 0
+
+      # ──────────────────────────────────────────
+      # 2. INSTALL DEPENDENCIES
+      # ──────────────────────────────────────────
+      - name: "📦 Install Dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libncurses-dev bison flex libssl-dev \
+            libelf-dev dwarves bc rsync cpio python3 \
+            git curl wget make lz4 zip unzip ccache \
+            fakeroot device-tree-compiler libdw-dev pkg-config
+
+      # ──────────────────────────────────────────
+      # 3. CACHE & CLONE TOOLCHAINS
+      # ──────────────────────────────────────────
+      - name: "💾 Cache GCC Toolchains"
+        id: cache-gcc
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/aarch64-linux-android-4.9
+            ${{ github.workspace }}/arm-linux-androideabi-4.9
+          key: gcc-lineage-${{ env.GCC_REV }}
+
+      - name: "🔧 Clone GCC Toolchains (jika tidak ada cache)"
+        if: steps.cache-gcc.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git \
+            ${{ github.workspace }}/aarch64-linux-android-4.9
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git \
+            ${{ github.workspace }}/arm-linux-androideabi-4.9
+
+      - name: "💾 Cache Clang Toolchain"
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/clang
+          key: clang-aosp-${{ env.CLANG_REV }}
+
+      - name: "🛠️ Download AOSP Clang (jika tidak ada cache)"
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ${{ env.CLANG_DIR }}
+          cd ${{ env.CLANG_DIR }}
+          wget -q --show-progress \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/${{ env.CLANG_REV }}.tar.gz" \
+            -O clang.tar.gz
+          tar -xzf clang.tar.gz
+          rm -f clang.tar.gz
+
+      # ──────────────────────────────────────────
+      # 4. CLONE ANYKERNEL3
+      # ──────────────────────────────────────────
+      - name: "📦 Clone AnyKernel3"
+        run: |
+          git clone --depth=1 \
+            https://github.com/Michikoextv2/AnyKernel3.git \
+            -b staging \
+            ${{ env.ANYKERNEL_DIR }}
+
+      # ──────────────────────────────────────────
+      # 5. COLLECT BUILD INFO
+      # ──────────────────────────────────────────
+      - name: "ℹ️ Collect Build Info"
+        id: info
+        run: |
+          CLANG_VERSION=$(${{ env.CLANG_DIR }}/bin/clang --version | head -n 1)
+          DATE_TAG=$(TZ=Asia/Jakarta date +"%d-%m-%Y")
+          DATETIME=$(TZ=Asia/Jakarta date +"%Y-%m-%d_%H-%M")
+          KERNEL_NAME="${{ github.event.inputs.KERNEL_NAME }}"
+          ZIP_NAME="${KERNEL_NAME}-${DATE_TAG}.zip"
+          LAST_COMMIT=$(git -C ${{ env.KERNEL_DIR }} log --oneline -1)
+          COMMIT_AUTHOR=$(git -C ${{ env.KERNEL_DIR }} log -1 --format="%an")
+          COMMIT_DATE=$(git -C ${{ env.KERNEL_DIR }} log -1 --format="%cd" --date=short)
+
+          echo "CLANG_VERSION=${CLANG_VERSION}" >> $GITHUB_OUTPUT
+          echo "DATE_TAG=${DATE_TAG}" >> $GITHUB_OUTPUT
+          echo "DATETIME=${DATETIME}" >> $GITHUB_OUTPUT
+          echo "KERNEL_NAME=${KERNEL_NAME}" >> $GITHUB_OUTPUT
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "LAST_COMMIT=${LAST_COMMIT}" >> $GITHUB_OUTPUT
+          echo "COMMIT_AUTHOR=${COMMIT_AUTHOR}" >> $GITHUB_OUTPUT
+          echo "COMMIT_DATE=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+
+      # ──────────────────────────────────────────
+      # 6. TELEGRAM — NOTIF MULAI + SIMPAN MESSAGE_ID
+      # ──────────────────────────────────────────
+      - name: "📣 Telegram — Notifikasi Build Dimulai"
+        id: tg_start
+        run: |
+          BUILD_START_EPOCH=$(date +%s)
+          BUILD_START_TIME=$(TZ=Asia/Jakarta date +"%H:%M:%S")
+
+          # Simpan epoch ke env agar bisa dipakai step berikutnya
+          echo "BUILD_START_EPOCH=${BUILD_START_EPOCH}" >> $GITHUB_ENV
+          echo "BUILD_START_TIME=${BUILD_START_TIME}" >> $GITHUB_ENV
+
+          MSG_TEXT="<b>Kernel Build Dimulai!</b>
+
+           🏷️ <b>Nama Kernel:</b> <code>${{ steps.info.outputs.KERNEL_NAME }}</code>
+           🌿 <b>Branch:</b> <code>${{ github.event.inputs.KERNEL_BRANCH }}</code>
+           🧰 <b>Clang:</b> <code>${{ steps.info.outputs.CLANG_VERSION }}</code>
+           📋 <b>Defconfig:</b> <code>${{ env.DEFCONFIG }}</code>
+           ⚡ <b>LTO:</b> <code>${{ github.event.inputs.ENABLE_LTO }}</code>
+           📷 <b>Camera Bootclock:</b> <code>${{ github.event.inputs.ENABLE_CAMERA_BOOTCLOCK }}</code>
+           📅 <b>Tanggal:</b> <code>${{ steps.info.outputs.DATE_TAG }}</code>
+           👤 <b>Triggered by:</b> <code>${{ github.actor }}</code>
+            
+           🕐 <b>Mulai:</b> <code>${BUILD_START_TIME} WIB</code>
+           ⏳ <i>Sedang melakukan build, harap tunggu...</i>"
+
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "text=${MSG_TEXT}")
+
+          # Simpan message_id untuk diedit nanti
+          MESSAGE_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['message_id'])")
+          echo "TG_MESSAGE_ID=${MESSAGE_ID}" >> $GITHUB_ENV
+          echo "Telegram message_id: ${MESSAGE_ID}"
+
+      # ──────────────────────────────────────────
+      # 7. BUILD KERNEL
+      # ──────────────────────────────────────────
+      - name: "🚀 Build Kernel"
+        id: build
+        run: |
+          chmod +x ${{ env.KERNEL_DIR }}/buildci.sh
+          cd ${{ env.KERNEL_DIR }}
+
+          export KERNEL_NAME="${{ github.event.inputs.KERNEL_NAME }}"
+          export ENABLE_LTO="${{ github.event.inputs.ENABLE_LTO }}"
+          export ENABLE_CAMERA_BOOTCLOCK="${{ github.event.inputs.ENABLE_CAMERA_BOOTCLOCK }}"
+          export CI_BUILD=true
+
+          bash buildci.sh 2>&1 | tee ${{ env.KERNEL_DIR }}/build.log
+          echo "BUILD_EXIT=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      # ──────────────────────────────────────────
+      # 8. CEK HASIL BUILD
+      # ──────────────────────────────────────────
+      - name: "✅ Verifikasi Hasil Build"
+        id: verify
+        run: |
+          IMAGE="${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz"
+          DTB="${{ env.OUT_DIR }}/arch/arm64/boot/dtb.img"
+          DTBO="${{ env.OUT_DIR }}/arch/arm64/boot/dtbo.img"
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "BUILD_OK=false" >> $GITHUB_OUTPUT
+            echo "❌ Image.gz tidak ditemukan!"
+            exit 1
+          fi
+
+          echo "BUILD_OK=true" >> $GITHUB_OUTPUT
+          echo "IMAGE_PATH=${IMAGE}" >> $GITHUB_OUTPUT
+          [ -f "$DTB" ]  && echo "DTB_PATH=${DTB}"   >> $GITHUB_OUTPUT || echo "DTB_PATH="  >> $GITHUB_OUTPUT
+          [ -f "$DTBO" ] && echo "DTBO_PATH=${DTBO}" >> $GITHUB_OUTPUT || echo "DTBO_PATH=" >> $GITHUB_OUTPUT
+
+      # ──────────────────────────────────────────
+      # 9. PACK ANYKERNEL3
+      # ──────────────────────────────────────────
+      - name: "📦 Pack AnyKernel3 ZIP"
+        if: steps.verify.outputs.BUILD_OK == 'true'
+        run: |
+          ANYKERNEL_KERNELS="${{ env.ANYKERNEL_DIR }}/kernels"
+          mkdir -p "${ANYKERNEL_KERNELS}"
+
+          cp "${{ steps.verify.outputs.IMAGE_PATH }}" "${ANYKERNEL_KERNELS}/Image.gz"
+
+          if [ -n "${{ steps.verify.outputs.DTB_PATH }}" ] && [ -f "${{ steps.verify.outputs.DTB_PATH }}" ]; then
+            cp "${{ steps.verify.outputs.DTB_PATH }}" "${ANYKERNEL_KERNELS}/dtb.img"
+          fi
+
+          if [ -n "${{ steps.verify.outputs.DTBO_PATH }}" ] && [ -f "${{ steps.verify.outputs.DTBO_PATH }}" ]; then
+            cp "${{ steps.verify.outputs.DTBO_PATH }}" "${ANYKERNEL_KERNELS}/dtbo.img"
+          fi
+
+          cd "${{ env.ANYKERNEL_DIR }}"
+          ZIP_NAME="${{ steps.info.outputs.ZIP_NAME }}"
+          zip -r9 "${{ github.workspace }}/${ZIP_NAME}" . -x "*.git*" -x "README.md"
+
+          echo "ZIP_PATH=${{ github.workspace }}/${ZIP_NAME}" >> $GITHUB_ENV
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+          echo "✅ ZIP dibuat: ${ZIP_NAME}"
+
+      # ──────────────────────────────────────────
+      # 10. UPLOAD ARTIFACT
+      # ──────────────────────────────────────────
+      - name: "💾 Upload Artifact"
+        if: steps.verify.outputs.BUILD_OK == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.info.outputs.ZIP_NAME }}
+          path: ${{ github.workspace }}/${{ steps.info.outputs.ZIP_NAME }}
+          retention-days: 7
+
+      # ──────────────────────────────────────────
+      # 11. BUAT GITHUB RELEASE
+      # ──────────────────────────────────────────
+      - name: "🚀 Create GitHub Release"
+        if: steps.verify.outputs.BUILD_OK == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ steps.info.outputs.KERNEL_NAME }}-${{ steps.info.outputs.DATE_TAG }}"
+          name: "💫 ${{ steps.info.outputs.KERNEL_NAME }} — ${{ steps.info.outputs.DATE_TAG }}"
+          body: |
+            ## 💫 ${{ steps.info.outputs.KERNEL_NAME }} Kernel
+
+            ### 📋 Build Info
+            | Info | Detail |
+            |------|--------|
+            | 📝 Nama | `${{ steps.info.outputs.KERNEL_NAME }}` |
+            | 🗂️ Branch | `${{ github.event.inputs.KERNEL_BRANCH }}` |
+            | 📋 Defconfig | `${{ env.DEFCONFIG }}` |
+            | 🧰 Clang | `${{ steps.info.outputs.CLANG_VERSION }}` |
+            | ⚡ LTO | `${{ github.event.inputs.ENABLE_LTO }}` |
+            | 📷 Camera Bootclock | `${{ github.event.inputs.ENABLE_CAMERA_BOOTCLOCK }}` |
+            | 📅 Tanggal Build | `${{ steps.info.outputs.DATE_TAG }}` |
+            | 👤 Builder | `${{ github.actor }}` |
+
+            ### 📝 Last Commit
+            ```
+            ${{ steps.info.outputs.LAST_COMMIT }}
+            ```
+            > **Author:** ${{ steps.info.outputs.COMMIT_AUTHOR }} | **Date:** ${{ steps.info.outputs.COMMIT_DATE }}
+
+            ### 📦 File
+            - `${{ steps.info.outputs.ZIP_NAME }}`
+
+            ---
+            > 🔧 Built by **Michikoextv2** — MICHIKO HYBRID Build System
+          files: ${{ github.workspace }}/${{ steps.info.outputs.ZIP_NAME }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ──────────────────────────────────────────
+      # 12. TELEGRAM — EDIT PESAN + KIRIM ZIP (SUKSES)
+      # ──────────────────────────────────────────
+      - name: "📤 Telegram — Update Status & Kirim Hasil Build"
+        if: steps.verify.outputs.BUILD_OK == 'true'
+        run: |
+          BUILD_END_EPOCH=$(date +%s)
+          BUILD_END_TIME=$(TZ=Asia/Jakarta date +"%H:%M:%S")
+          ELAPSED=$(( BUILD_END_EPOCH - BUILD_START_EPOCH ))
+          ELAPSED_MIN=$(( ELAPSED / 60 ))
+          ELAPSED_SEC=$(( ELAPSED % 60 ))
+          DURATION="${ELAPSED_MIN} menit ${ELAPSED_SEC} detik"
+
+          # Edit pesan "Sedang melakukan build..." menjadi status selesai
+          EDIT_TEXT="<b>✅ Kernel Build Selesai!</b>
+
+            🏷️ <b>Nama Kernel:</b> <code>${{ steps.info.outputs.KERNEL_NAME }}</code>
+            🌿 <b>Branch:</b> <code>${{ github.event.inputs.KERNEL_BRANCH }}</code>
+            🧰 <b>Clang:</b> <code>${{ steps.info.outputs.CLANG_VERSION }}</code>
+            📋 <b>Defconfig:</b> <code>${{ env.DEFCONFIG }}</code>
+            ⚡ <b>LTO:</b> <code>${{ github.event.inputs.ENABLE_LTO }}</code>
+            📷 <b>Camera Bootclock:</b> <code>${{ github.event.inputs.ENABLE_CAMERA_BOOTCLOCK }}</code>
+            📅 <b>Tanggal:</b> <code>${{ steps.info.outputs.DATE_TAG }}</code>
+            👤 <b>Triggered by:</b> <code>${{ github.actor }}</code>
+            
+            🕐 <b>Mulai:</b> <code>${BUILD_START_TIME} WIB</code>
+            🕑 <b>Selesai:</b> <code>${BUILD_END_TIME} WIB</code>
+            ⏰ <b>Total Waktu Build:</b> <code>${DURATION}</code>
+            
+            ✅ <i>Build berhasil! File ZIP sedang dikirim...</i>"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "message_id=${TG_MESSAGE_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "text=${EDIT_TEXT}"
+
+          # Kirim ZIP dengan caption ringkasan
+          CAPTION="📦 <b>${{ steps.info.outputs.ZIP_NAME }}</b>
+          ⌛ Build selesai dalam <code>${DURATION}</code>
+          👤 by <code>${{ github.actor }}</code>"
+            
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F parse_mode="HTML" \
+            -F caption="${CAPTION}" \
+            -F document=@"${{ env.ZIP_PATH }}"
+
+      # ──────────────────────────────────────────
+      # 13. TELEGRAM — EDIT PESAN + NOTIF GAGAL
+      # ──────────────────────────────────────────
+      - name: "❌ Telegram — Update Status Build Gagal"
+        if: failure()
+        run: |
+          BUILD_END_EPOCH=$(date +%s)
+          BUILD_END_TIME=$(TZ=Asia/Jakarta date +"%H:%M:%S")
+          ELAPSED=$(( BUILD_END_EPOCH - BUILD_START_EPOCH ))
+          ELAPSED_MIN=$(( ELAPSED / 60 ))
+          ELAPSED_SEC=$(( ELAPSED % 60 ))
+          DURATION="${ELAPSED_MIN} menit ${ELAPSED_SEC} detik"
+
+          if [ -f "${{ env.KERNEL_DIR }}/build.log" ]; then
+            LOG_TAIL=$(tail -30 "${{ env.KERNEL_DIR }}/build.log" \
+              | grep -iE "error:|undefined|fatal|cannot" \
+              | tail -15 \
+              | sed 's/</\&lt;/g; s/>/\&gt;/g')
+          else
+            LOG_TAIL="Build log tidak tersedia."
+          fi
+
+          # Edit pesan "Sedang melakukan build..." menjadi status gagal
+          # (jika TG_MESSAGE_ID tersedia — bisa kosong jika gagal sebelum step 6)
+          if [ -n "${TG_MESSAGE_ID}" ]; then
+            EDIT_TEXT="<b>❌ Kernel Build GAGAL!</b>
+            
+            🏷️ <b>Nama Kernel:</b> <code>${{ steps.info.outputs.KERNEL_NAME }}</code>
+            🌿 <b>Branch:</b> <code>${{ github.event.inputs.KERNEL_BRANCH }}</code>
+            📋 <b>Defconfig:</b> <code>${{ env.DEFCONFIG }}</code>
+            👤 <b>Triggered by:</b> <code>${{ github.actor }}</code>
+            
+            🕐 <b>Mulai:</b> <code>${BUILD_START_TIME} WIB</code>
+            🕑 <b>Gagal pada:</b> <code>${BUILD_END_TIME} WIB</code>
+            ⏰ <b>Durasi:</b> <code>${DURATION}</code>
+            
+            🔍 <b>Error Log:</b>
+            <pre>${LOG_TAIL}</pre>
+            
+            🔗 <a href=\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Lihat Detail di GitHub Actions</a>"
+            
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/editMessageText" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "message_id=${TG_MESSAGE_ID}" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "text=${EDIT_TEXT}"
+          else
+            # Fallback: kirim pesan baru jika message_id belum ada
+            FAIL_TEXT="<b>❌ Build Kernel GAGAL!</b>
+            
+            🗂️ <b>Nama:</b> <code>${{ steps.info.outputs.KERNEL_NAME }}</code>
+            📝 <b>Branch:</b> <code>${{ github.event.inputs.KERNEL_BRANCH }}</code>
+            👤 <b>Triggered by:</b> <code>${{ github.actor }}</code>
+            
+            🔍 <b>Error Log:</b>
+            <pre>${LOG_TAIL}</pre>
+            
+            🔗 <a href=\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\">Lihat Detail</a>"
+
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "text=${FAIL_TEXT}"
+          fi
+          
